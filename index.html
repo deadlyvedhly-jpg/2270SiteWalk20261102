@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Site walk map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root { --surface:#ffffff; --text:#1d2430; --muted:#5b6573; --action:#f2c200; --dot:#1a73e8; color-scheme:light; }
+  @media (prefers-color-scheme: dark) { :root { --surface:#1f2630; --text:#f1f3f6; --muted:#aab3bf; color-scheme:dark; } }
+  html, body { height:100%; margin:0; }
+  body { background:#222; font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif; }
+  #map { position:fixed; inset:0; }
+  .leaflet-top { top:env(safe-area-inset-top,0px); }
+
+  #title {
+    position:fixed; top:calc(10px + env(safe-area-inset-top,0px)); left:50%; transform:translateX(-50%);
+    z-index:1000; background:var(--surface); color:var(--text); padding:6px 14px; border-radius:999px;
+    font-size:.95rem; font-weight:650; box-shadow:0 2px 10px rgba(0,0,0,.25);
+    white-space:nowrap; max-width:calc(100% - 120px); overflow:hidden; text-overflow:ellipsis;
+  }
+
+  #bar {
+    position:fixed; left:12px; right:12px; bottom:calc(14px + env(safe-area-inset-bottom,0px));
+    z-index:1000; display:flex; align-items:center; gap:12px; justify-content:space-between;
+    max-width:520px; margin:0 auto;
+  }
+  #status {
+    background:var(--surface); color:var(--muted); font-size:.9rem; padding:10px 14px;
+    border-radius:12px; box-shadow:0 2px 10px rgba(0,0,0,.25); flex:1; min-width:0;
+  }
+  #status:empty { visibility:hidden; }
+  #centre {
+    font:inherit; font-weight:700; font-size:1.05rem; border:0; border-radius:14px;
+    padding:14px 20px; min-height:52px; background:var(--action); color:#1d2430;
+    box-shadow:0 2px 12px rgba(0,0,0,.3); cursor:pointer; white-space:nowrap;
+    display:flex; align-items:center; gap:8px;
+  }
+  #centre svg { width:22px; height:22px; }
+  #centre:focus-visible { outline:3px solid var(--dot); outline-offset:2px; }
+
+  .me { width:20px; height:20px; border-radius:50%; background:var(--dot); border:3px solid #fff; box-sizing:border-box;
+        animation:pulse 2s infinite; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(26,115,232,.55)} 70%{box-shadow:0 0 0 16px rgba(26,115,232,0)} 100%{box-shadow:0 0 0 0 rgba(26,115,232,0)} }
+  @media (prefers-reduced-motion: reduce) { .me { animation:none; } }
+</style>
+</head>
+<body>
+<div id="map" role="application" aria-label="Aerial map of the site"></div>
+<div id="title"></div>
+<div id="bar">
+  <div id="status" aria-live="polite"></div>
+  <button id="centre" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+    Centre on me
+  </button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+/* ============ EDIT FOR EACH SITE ============ */
+const CONFIG = {
+  title: "Area 1 site walk",
+  layers: [
+    // file, name in the layers menu, colour, line weight, fill (0 = none), shown at start
+    // fit: true  -> the map opens framed on this layer
+    // radiusField -> points drawn as true-size circles in metres (tree canopies)
+    { file: "cadastre.geojson",       name: "Cadastre (existing)", colour: "#ffe14d", weight: 1.3, on: true },
+    { file: "road-pavement.geojson",  name: "Road pavement",       colour: "#d9d9d9", weight: 1,   fill: 0.25, on: true },
+    { file: "path.geojson",           name: "Paths",               colour: "#ffa94d", weight: 1.2, fill: 0.3, on: true },
+    { file: "road.geojson",           name: "Road linework",       colour: "#ff4d4d", weight: 1.2, on: true },
+    { file: "drainage.geojson",       name: "Drains and culverts", colour: "#3db5ff", weight: 2.2, on: true },
+    { file: "design.geojson",         name: "Design features",     colour: "#ff9ff3", weight: 1.5, on: true },
+    { file: "design-reserve.geojson", name: "Design reserves",     colour: "#ffffff", weight: 2,   on: true, fit: true },
+    { file: "trees.geojson",          name: "Trees",               colour: "#38c24f", weight: 1,   fill: 0.25, radiusField: "r", on: true },
+  ]
+};
+/* ============================================ */
+
+document.getElementById("title").textContent = CONFIG.title;
+document.title = CONFIG.title;
+const statusEl = document.getElementById("status");
+const centreBtn = document.getElementById("centre");
+
+const map = L.map("map", { preferCanvas: true });
+L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+  { maxZoom: 21, maxNativeZoom: 19, attribution: "Imagery © Esri, Maxar, Earthstar Geographics" }).addTo(map);
+map.setView([-31.95, 115.86], 12);
+
+const layerControl = L.control.layers(null, {}, { collapsed: true, position: "topright" }).addTo(map);
+
+const loaded = [];
+CONFIG.layers.forEach((cfg, i) => {
+  loaded[i] = fetch(cfg.file)
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(data => {
+      const lyr = L.geoJSON(data, {
+        interactive: false,
+        style: () => ({ color: cfg.colour, weight: cfg.weight || 1.5, opacity: 0.95,
+                        fill: !!cfg.fill, fillColor: cfg.colour, fillOpacity: cfg.fill || 0 }),
+        pointToLayer: (f, ll) => cfg.radiusField
+          ? L.circle(ll, { radius: (f.properties || {})[cfg.radiusField] || 2, color: cfg.colour, weight: 1, fillOpacity: cfg.fill || 0.25, interactive: false })
+          : L.circleMarker(ll, { radius: cfg.radius || 4, color: cfg.colour, weight: 1, fillOpacity: 0.7, interactive: false })
+      });
+      return { cfg, lyr };
+    })
+    .catch(() => { console.warn("Skipped " + cfg.file); return null; });
+});
+// Add in listed order so the drawing order is predictable, then frame the map.
+Promise.all(loaded).then(items => {
+  let fitTo = null;
+  items.forEach(it => {
+    if (!it) return;
+    if (it.cfg.on !== false) it.lyr.addTo(map);
+    layerControl.addOverlay(it.lyr, it.cfg.name);
+    const b = it.lyr.getBounds();
+    if (b.isValid() && (it.cfg.fit || !fitTo)) fitTo = it.cfg.fit ? b : (fitTo || b);
+  });
+  if (fitTo && !meMarker) map.fitBounds(fitTo, { padding: [30, 30] });
+});
+
+/* --- Live location --- */
+let meMarker = null, accCircle = null, follow = false, watching = false;
+
+function startTracking() {
+  if (!("geolocation" in navigator)) { statusEl.textContent = "This browser can't share location."; return; }
+  if (!window.isSecureContext) { statusEl.textContent = "Location only works when the page is opened over https."; return; }
+  watching = true; follow = true;
+  statusEl.textContent = "Finding you… allow location if asked.";
+  navigator.geolocation.watchPosition(onPosition, onError, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
+}
+
+function onPosition(pos) {
+  const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+  const ll = [lat, lng];
+  if (!meMarker) {
+    meMarker = L.marker(ll, { icon: L.divIcon({ className: "", html: '<div class="me"></div>', iconSize: [20, 20], iconAnchor: [10, 10] }),
+                              interactive: false, keyboard: false, zIndexOffset: 1000 }).addTo(map);
+    accCircle = L.circle(ll, { radius: accuracy, color: "#1a73e8", weight: 1, fillOpacity: 0.12, interactive: false }).addTo(map);
+  } else {
+    meMarker.setLatLng(ll); accCircle.setLatLng(ll).setRadius(accuracy);
+  }
+  if (follow) map.setView(ll, Math.max(map.getZoom(), 18), { animate: true });
+  statusEl.textContent = "Accurate to about " + Math.round(accuracy) + " m";
+}
+
+function onError(err) {
+  statusEl.textContent = err.code === 1
+    ? "Location is off. Allow it for this site in your browser settings, then reload."
+    : "Waiting for a GPS signal…";
+}
+
+map.on("dragstart", () => { follow = false; });
+centreBtn.addEventListener("click", () => {
+  if (!watching) return startTracking();
+  follow = true;
+  if (meMarker) map.setView(meMarker.getLatLng(), Math.max(map.getZoom(), 18));
+});
+</script>
+</body>
+</html>
